@@ -122,6 +122,27 @@ export async function logs({ config }: Project, args: string[]): Promise<void> {
   });
 }
 
+export async function screenshot({ config }: Project, args: string[]): Promise<void> {
+  const option = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+  const out = path.resolve(option('--out') ?? `fivem-testbed-${new Date().toISOString().replace(/[:.]/g, '-')}.png`);
+  const maxSide = Number(option('--max') ?? 1920);
+  await withRemote(config, async (remote) => {
+    const shot = await remote.call('window.screenshot', { maxSide });
+    fs.writeFileSync(out, Buffer.from(shot.png, 'base64'));
+    console.log(`${out} (${shot.width}x${shot.height})`);
+  });
+}
+
+export async function key({ config }: Project, name: string | undefined): Promise<void> {
+  if (!name) throw new UsageError('usage: fivem-testbed key <name>');
+  await withRemote(config, (remote) => remote.call('window.key', { key: name }));
+}
+
+export async function typeText({ config }: Project, words: string[]): Promise<void> {
+  if (words.length === 0) throw new UsageError('usage: fivem-testbed type <text...>');
+  await withRemote(config, (remote) => remote.call('window.text', { text: words.join(' ') }));
+}
+
 export async function doctor(): Promise<void> {
   let project: Project;
   try {

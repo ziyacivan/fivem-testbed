@@ -14,6 +14,9 @@ usage: fivem-testbed <command>
   client <launch|quit|status>
   logs [--client] [--follow] [--lines <n>]
   rcon <command...>
+  screenshot [--out <file>] [--max <px>] save a screenshot of the game window
+  key <name>                            press a key in the game window
+  type <text...>                        type text into the game window
   doctor                                check the test environment
   mcp                                   start the MCP server (stdio)
 
@@ -40,6 +43,12 @@ export async function runCli([command, ...args]: string[]): Promise<void> {
       return commands.client(findProject(), args[0]);
     case 'rcon':
       return commands.rconCommand(findProject(), args);
+    case 'screenshot':
+      return commands.screenshot(findProject(), args);
+    case 'key':
+      return commands.key(findProject(), args[0]);
+    case 'type':
+      return commands.typeText(findProject(), args);
     case 'logs':
       return commands.logs(findProject(), args);
     case 'host':

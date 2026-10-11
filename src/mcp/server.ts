@@ -5,10 +5,14 @@ import { z } from 'zod';
 import { runDeploy } from '../cli/deploy.ts';
 import { findProject, type Project } from '../cli/project.ts';
 import { bridgeClientOps, bridgeServerOps, type MethodName, type Params, type Result } from '../protocol/messages.ts';
+import { KEY_NAMES } from '../protocol/keys.ts';
 import { VERSION } from '../protocol/version.ts';
 import { Remote } from '../remote/client.ts';
 
-type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
+type ToolResult = {
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
+  isError?: boolean;
+};
 
 const text = (value: unknown): ToolResult => ({
   content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
@@ -175,6 +179,76 @@ export async function runMcp(): Promise<void> {
       const params = side === 'server' ? { target: side, op, args: args ?? {} } : { target: side, op, src, args: args ?? {} };
       return session.call('bridge', params as Params<'bridge'>);
     }),
+  );
+
+  server.registerTool(
+    'screenshot',
+    {
+      description:
+        'PNG of the game window on the test host, scaled down so the longest side is maxSide (default 900). ' +
+        'Each image costs many tokens for the rest of the session: prefer console and bridge checks, and use a small maxSide or a crop.',
+      inputSchema: {
+        maxSide: z.number().int().min(64).max(4096).optional(),
+        crop: z.object({ x: z.number().int(), y: z.number().int(), width: z.number().int(), height: z.number().int() }).optional(),
+      },
+      annotations: readOnly,
+    },
+    async (args: Params<'window.screenshot'>): Promise<ToolResult> => {
+      try {
+        const shot = await session.call('window.screenshot', args);
+        return {
+          content: [
+            { type: 'image', data: shot.png, mimeType: 'image/png' },
+            { type: 'text', text: `${shot.width}x${shot.height}` },
+          ],
+        };
+      } catch (error) {
+        return { ...text(error instanceof Error ? error.message : String(error)), isError: true };
+      }
+    },
+  );
+
+  server.registerTool(
+    'window_status',
+    { description: 'State of the game window: found, focused, title and client rectangle.', annotations: readOnly },
+    tool(async () => session.call('window.status', {})),
+  );
+
+  server.registerTool(
+    'press_key',
+    {
+      description: `Press one key in the game window (scan code input). Keys: ${KEY_NAMES.join(', ')}.`,
+      inputSchema: { key: z.string(), holdMs: z.number().int().min(0).max(10_000).optional() },
+    },
+    tool(async (args: Params<'window.key'>) => session.call('window.key', args)),
+  );
+
+  server.registerTool(
+    'type_text',
+    {
+      description: 'Type text into the game window as Unicode key events, for example into the chat input or the F8 console.',
+      inputSchema: { text: z.string().min(1).max(500) },
+    },
+    tool(async (args: Params<'window.text'>) => session.call('window.text', args)),
+  );
+
+  server.registerTool(
+    'mouse',
+    {
+      description:
+        'Mouse input in the game window. move {dx, dy}: relative move (camera). position {x, y}: cursor position in window pixels (NUI). ' +
+        'click {button}: left or right click. scroll {amount}: wheel steps.',
+      inputSchema: {
+        action: z.enum(['move', 'position', 'click', 'scroll']),
+        dx: z.number().int().optional(),
+        dy: z.number().int().optional(),
+        x: z.number().int().optional(),
+        y: z.number().int().optional(),
+        button: z.enum(['left', 'right']).optional(),
+        amount: z.number().int().optional(),
+      },
+    },
+    tool(async (args: Record<string, unknown>) => session.call('window.mouse', args as Params<'window.mouse'>)),
   );
 
   server.registerPrompt(
