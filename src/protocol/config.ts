@@ -10,6 +10,9 @@ export const resourceEntry = z.object({
   reload: z.boolean().optional(),
 });
 
+// A convar name for an extra secret (SPEC-0002 D2).
+export const CONVAR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
 export const projectConfig = z.object({
   $schema: z.string().optional(),
   host: z.string().min(1),
@@ -26,6 +29,7 @@ export const projectConfig = z.object({
       natives: z.array(z.string()).default([]),
     })
     .default({ events: [], exports: [], natives: [] }),
+  secrets: z.array(z.string().regex(CONVAR_NAME)).default([]),
 });
 
 export type ProjectConfig = z.infer<typeof projectConfig>;

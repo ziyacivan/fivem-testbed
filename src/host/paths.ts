@@ -67,6 +67,29 @@ export function initSecrets(file: string): boolean {
   return changed;
 }
 
+// `CFG_<convar>=<value>` lines become `set <convar> "<value>"` (SPEC-0002 D1 to D3).
+export interface ExtraSecrets {
+  values: Map<string, string>;
+  skipped: string[];
+}
+
+export function extraSecrets(file: string): ExtraSecrets {
+  const values = new Map<string, string>();
+  const skipped: string[] = [];
+  for (const [key, value] of readSecrets(file)) {
+    if (!key.startsWith('CFG_')) continue;
+    const name = key.slice(4);
+    if (/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) values.set(name, value);
+    else skipped.push(key);
+  }
+  return { values, skipped };
+}
+
+export function secretLine(name: string, value: string): string {
+  if (/["\r\n\0]/.test(value)) throw new Error(`the value of CFG_${name} in secrets.env contains a quote, a line break or a NUL`);
+  return `set ${name} "${value}"`;
+}
+
 export function requireSecret(file: string, key: SecretKey): string {
   const value = readSecrets(file).get(key);
   if (!value) {

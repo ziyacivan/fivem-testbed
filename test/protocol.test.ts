@@ -76,3 +76,22 @@ describe('key codes', async () => {
     expect(() => keyCode('nope')).toThrow();
   });
 });
+
+describe('extra secrets', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { extraSecrets, secretLine } = await import('../src/host/paths.ts');
+  it('reads CFG_ keys with valid convar names only', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-')), 'secrets.env');
+    fs.writeFileSync(file, 'RCON_PASSWORD=x\nCFG_neo_database_url=postgres://a@b/c\nCFG_bad-name=1\nCFG_1x=2\n');
+    const extra = extraSecrets(file);
+    expect([...extra.values]).toEqual([['neo_database_url', 'postgres://a@b/c']]);
+    expect(extra.skipped).toEqual(['CFG_bad-name', 'CFG_1x']);
+  });
+  it('refuses a value with a quote or a line break', () => {
+    expect(secretLine('a', 'ok')).toBe('set a "ok"');
+    expect(() => secretLine('a', 'x" exec evil')).toThrow();
+    expect(() => secretLine('a', 'x\nquit')).toThrow();
+  });
+});

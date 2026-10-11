@@ -37,7 +37,12 @@ export const methods = {
   },
   health: { params: empty, result: z.object({ checks: z.array(healthCheck) }) },
   'server.configure': {
-    params: z.object({ serverCfg: z.string(), connect: z.string(), bridge: bridgeSettings }),
+    params: z.object({
+      serverCfg: z.string(),
+      connect: z.string(),
+      bridge: bridgeSettings,
+      secrets: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/)).default([]),
+    }),
     result: empty,
   },
   'server.start': { params: empty, result: serverStatus },

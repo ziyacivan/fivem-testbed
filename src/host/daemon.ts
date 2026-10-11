@@ -17,11 +17,12 @@ import { VERSION } from '../protocol/version.ts';
 import { keyCode } from '../protocol/keys.ts';
 import { ConsoleBuffer } from './console-buffer.ts';
 import { WindowHelper } from './window-helper.ts';
-import { type HostPaths, hostPaths, readSecrets, requireSecret } from './paths.ts';
+import { extraSecrets, type HostPaths, hostPaths, readSecrets, requireSecret, secretLine } from './paths.ts';
 import { killImage, killTree, processesWithPrefix, run } from './windows.ts';
 
 interface State {
   connect: string;
+  secrets?: string[];
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,7 +112,7 @@ class Daemon {
     };
   }
 
-  configure({ serverCfg, connect, bridge }: z.output<typeof methods['server.configure']['params']>): Result<'server.configure'> {
+  configure({ serverCfg, connect, bridge, secrets }: z.output<typeof methods['server.configure']['params']>): Result<'server.configure'> {
     const port = connect.split(':')[1];
     const header = [
       '# Written by fivem-testbed. Edit the server.cfg of the project, not this file.',
@@ -138,7 +139,7 @@ class Daemon {
     ].join('\n');
     fs.mkdirSync(this.paths.serverData, { recursive: true });
     fs.writeFileSync(this.paths.serverCfg, `${header}${serverCfg.replace(/\r\n/g, '\n')}\n${footer}`);
-    fs.writeFileSync(this.paths.state, JSON.stringify({ connect } satisfies State));
+    fs.writeFileSync(this.paths.state, JSON.stringify({ connect, secrets } satisfies State));
     return {};
   }
 
@@ -149,6 +150,12 @@ class Daemon {
       `set rcon_password "${requireSecret(this.paths.secrets, 'RCON_PASSWORD')}"`,
       `set testbed_token "${requireSecret(this.paths.secrets, 'BRIDGE_TOKEN')}"`,
     ];
+    const extra = extraSecrets(this.paths.secrets);
+    for (const key of extra.skipped) console.error(`secrets.env: ${key} skipped, not a valid convar name`);
+    for (const name of this.state.secrets ?? []) {
+      if (!extra.values.get(name)) throw new Error(`the project needs CFG_${name} in ${this.paths.secrets}`);
+    }
+    for (const [name, value] of extra.values) lines.push(secretLine(name, value));
     fs.writeFileSync(this.paths.secretsCfg, `${lines.join('\n')}\n`, { mode: 0o600 });
   }
 
@@ -347,6 +354,8 @@ class Daemon {
     const secrets = readSecrets(this.paths.secrets);
     check(Boolean(secrets.get('RCON_PASSWORD')), 'rcon password', this.paths.secrets);
     check(Boolean(secrets.get('LICENSE_KEY')), 'license key', `LICENSE_KEY in ${this.paths.secrets}`);
+    const extra = extraSecrets(this.paths.secrets).values;
+    for (const name of this.state.secrets ?? []) check(Boolean(extra.get(name)), `secret ${name}`, `CFG_${name} in ${this.paths.secrets}`);
     check(fs.existsSync(this.paths.serverCfg), 'server.cfg', this.paths.serverCfg);
     const server = await this.serverStatus();
     check(!server.running || server.rcon, 'server', server.running ? `running, rcon ${server.rcon ? 'ok' : 'no answer'}` : 'stopped');

@@ -63,7 +63,7 @@ export async function runDeploy(project: Project, remote: Remote, only: string[]
     log(`deployed ${resource.category}/${resource.name} (${archive.length} bytes)`);
   }
   const serverCfg = fs.readFileSync(path.resolve(dir, config.serverCfg), 'utf8');
-  await remote.call('server.configure', { serverCfg, connect: config.connect, bridge: config.bridge });
+  await remote.call('server.configure', { serverCfg, connect: config.connect, bridge: config.bridge, secrets: config.secrets });
   const names = resources.filter((r) => r.reload ?? r.category === '[project]').map((r) => r.name);
   log((await remote.call('resource.reload', { names })).output);
 }
