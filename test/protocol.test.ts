@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest';
+import { decodeRconReply, encodeRconRequest } from '../src/fivem/rcon.ts';
+import { pipeName, projectConfig } from '../src/protocol/config.ts';
+import { isMethodName } from '../src/protocol/messages.ts';
+import { LineSplitter } from '../src/protocol/rpc.ts';
+
+describe('rcon framing', () => {
+  it('encodes a request with the 0xFF prefix', () => {
+    const packet = encodeRconRequest('secret', 'status');
+    expect([...packet.subarray(0, 4)]).toEqual([0xff, 0xff, 0xff, 0xff]);
+    expect(packet.subarray(4).toString()).toBe('rcon secret status');
+  });
+
+  it('refuses a multi-line command', () => {
+    expect(() => encodeRconRequest('secret', 'a\nquit')).toThrow();
+  });
+
+  it('decodes a print reply', () => {
+    const reply = Buffer.concat([Buffer.from([0xff, 0xff, 0xff, 0xff]), Buffer.from('print hello\n')]);
+    expect(decodeRconReply(reply)).toBe('hello\n');
+  });
+});
+
+describe('LineSplitter', () => {
+  it('joins partial lines across chunks', () => {
+    const splitter = new LineSplitter();
+    expect(splitter.push('{"a":1}\n{"b"')).toEqual(['{"a":1}']);
+    expect(splitter.push(':2}\r\n')).toEqual(['{"b":2}']);
+  });
+});
+
+describe('project config', () => {
+  it('applies the defaults', () => {
+    const config = projectConfig.parse({
+      host: 'neo-test',
+      fxserver: { build: '37175-0105063b0394b1b9d085c917a8dc9c9abf0a620f' },
+      resources: [{ name: 'neo', path: 'resources/neo' }],
+    });
+    expect(config.root).toBe('C:/fivem-testbed');
+    expect(config.connect).toBe('127.0.0.1:30120');
+    expect(config.resources[0]?.category).toBe('[project]');
+  });
+
+  it('refuses a build without the commit hash', () => {
+    expect(projectConfig.safeParse({ host: 'h', fxserver: { build: '37175' } }).success).toBe(false);
+  });
+});
+
+describe('protocol helpers', () => {
+  it('does not accept prototype keys as method names', () => {
+    expect(isMethodName('constructor')).toBe(false);
+    expect(isMethodName('server.start')).toBe(true);
+  });
+
+  it('makes a safe pipe name', () => {
+    expect(pipeName('Yusuf Z')).toBe('\\\\.\\pipe\\fivem-testbed-yusuf_z');
+  });
+});

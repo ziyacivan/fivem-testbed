@@ -1,0 +1,188 @@
+// Dev host commands (SPEC-0001 section 11).
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CONFIG_FILE, type ProjectConfig } from '../protocol/config.ts';
+import type { ConsoleTarget } from '../protocol/messages.ts';
+import { VERSION } from '../protocol/version.ts';
+import { Remote, remoteHost } from '../remote/client.ts';
+import { findProject, type Project } from './project.ts';
+
+const CHUNK_BYTES = 512 * 1024;
+
+export class UsageError extends Error {}
+
+function exec(command: string, args: string[], options: { cwd?: string; shell?: boolean } = {}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: 'inherit', ...options });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${command} exited with code ${code}`))));
+  });
+}
+
+function tarFolder(dir: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(dir)) {
+      reject(new Error(`${dir} does not exist`));
+      return;
+    }
+    const tar = spawn('tar', ['-c', '--no-xattrs', '-f', '-', '-C', dir, '.'], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+      env: { ...process.env, COPYFILE_DISABLE: '1' },
+    });
+    const chunks: Buffer[] = [];
+    tar.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    tar.on('error', reject);
+    tar.on('close', (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`tar exited with code ${code}`))));
+  });
+}
+
+async function withRemote<T>(config: ProjectConfig, run: (remote: Remote) => Promise<T>): Promise<T> {
+  const remote = await Remote.connect(config);
+  try {
+    return await run(remote);
+  } finally {
+    remote.close();
+  }
+}
+
+const print = (value: unknown) => console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+
+export async function init(): Promise<void> {
+  const file = path.resolve(CONFIG_FILE);
+  if (fs.existsSync(file)) throw new UsageError(`${CONFIG_FILE} exists`);
+  const config = {
+    host: 'testbed',
+    root: 'C:/fivem-testbed',
+    fxserver: { build: '37175-0105063b0394b1b9d085c917a8dc9c9abf0a620f' },
+    connect: '127.0.0.1:30120',
+    build: 'npm run build',
+    serverCfg: 'fivem-testbed/server.cfg',
+    resources: [{ name: 'my-resource', path: 'resources/my-resource', category: '[project]' }],
+  };
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const cfg = path.resolve('fivem-testbed', 'server.cfg');
+  if (!fs.existsSync(cfg)) {
+    fs.mkdirSync(path.dirname(cfg), { recursive: true });
+    fs.writeFileSync(
+      cfg,
+      [
+        '# fivem-testbed adds the endpoints and `exec secrets.cfg` above these lines.',
+        'sv_lan true',
+        'sv_hostname "fivem-testbed"',
+        'sv_maxclients 8',
+        'set onesync on',
+        '',
+        'ensure my-resource',
+        '',
+      ].join('\n'),
+    );
+  }
+  console.log(`wrote ${CONFIG_FILE} and fivem-testbed/server.cfg`);
+}
+
+// Installs this package version on the test host and runs `host setup` there.
+export async function hostInstall({ config }: Project, local: boolean): Promise<void> {
+  const host = remoteHost(config);
+  const windowsRoot = config.root.replaceAll('/', '\\');
+  await exec('ssh', ['-T', host, `if not exist ${windowsRoot}\\tmp mkdir ${windowsRoot}\\tmp`]);
+  let spec = `fivem-testbed@${VERSION}`;
+  if (local) {
+    const packageDir = fileURLToPath(new URL('../..', import.meta.url));
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'fivem-testbed-'));
+    await exec('npm', ['pack', '--silent', '--pack-destination', out], { cwd: packageDir });
+    const tgz = fs.readdirSync(out).find((name) => name.endsWith('.tgz'));
+    if (!tgz) throw new Error('npm pack made no archive');
+    await exec('scp', ['-q', path.join(out, tgz), `${host}:${config.root}/tmp/${tgz}`]);
+    spec = `${config.root}/tmp/${tgz}`;
+  }
+  await exec('ssh', ['-T', host, `npm install --global --no-fund --no-audit ${spec}`]);
+  await exec('ssh', ['-T', host, `fivem-testbed host setup --root ${config.root} --build ${config.fxserver.build}`]);
+}
+
+export async function deploy({ dir, config }: Project, only: string[]): Promise<void> {
+  if (config.build) await exec(config.build, [], { cwd: dir, shell: true });
+  const resources = only.length > 0 ? config.resources.filter((r) => only.includes(r.name)) : config.resources;
+  const unknown = only.filter((name) => !config.resources.some((r) => r.name === name));
+  if (unknown.length > 0) throw new UsageError(`unknown resource: ${unknown.join(', ')}`);
+  await withRemote(config, async (remote) => {
+    for (const resource of resources) {
+      const archive = await tarFolder(path.resolve(dir, resource.path));
+      const uploadId = randomUUID();
+      for (let offset = 0; offset < archive.length; offset += CHUNK_BYTES) {
+        await remote.call('resource.upload', { uploadId, chunk: archive.subarray(offset, offset + CHUNK_BYTES).toString('base64') });
+      }
+      await remote.call('resource.commit', { uploadId, category: resource.category, name: resource.name });
+      console.log(`deployed ${resource.category}/${resource.name} (${archive.length} bytes)`);
+    }
+    const serverCfg = fs.readFileSync(path.resolve(dir, config.serverCfg), 'utf8');
+    await remote.call('server.configure', { serverCfg, connect: config.connect });
+    const names = resources.filter((r) => r.reload ?? r.category === '[project]').map((r) => r.name);
+    print((await remote.call('resource.reload', { names })).output);
+  });
+}
+
+export async function server({ config }: Project, action: string | undefined): Promise<void> {
+  const method = { start: 'server.start', stop: 'server.stop', restart: 'server.restart', status: 'server.status' } as const;
+  if (!action || !Object.hasOwn(method, action)) throw new UsageError('usage: fivem-testbed server <start|stop|restart|status>');
+  await withRemote(config, async (remote) => print(await remote.call(method[action as keyof typeof method], {})));
+}
+
+export async function client({ config }: Project, action: string | undefined): Promise<void> {
+  const method = { launch: 'client.launch', quit: 'client.quit', status: 'client.status' } as const;
+  if (!action || !Object.hasOwn(method, action)) throw new UsageError('usage: fivem-testbed client <launch|quit|status>');
+  await withRemote(config, async (remote) => print(await remote.call(method[action as keyof typeof method], {})));
+}
+
+export async function rconCommand({ config }: Project, words: string[]): Promise<void> {
+  if (words.length === 0) throw new UsageError('usage: fivem-testbed rcon <command...>');
+  await withRemote(config, async (remote) => print((await remote.call('rcon', { command: words.join(' ') })).output));
+}
+
+export async function logs({ config }: Project, args: string[]): Promise<void> {
+  const target: ConsoleTarget = args.includes('--client') ? 'client' : 'server';
+  const limitIndex = args.indexOf('--lines');
+  const limit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 100;
+  await withRemote(config, async (remote) => {
+    let { lines, cursor } = await remote.call('console.read', { target, limit });
+    for (const line of lines) console.log(line.text);
+    if (!args.includes('--follow')) return;
+    for (;;) {
+      const waited = await remote.call('console.wait', { target, pattern: '.', after: cursor, timeoutMs: 30_000 });
+      if (!waited.line) continue;
+      ({ lines, cursor } = await remote.call('console.read', { target, after: cursor, limit: 5000 }));
+      for (const line of lines) console.log(line.text);
+    }
+  });
+}
+
+export async function doctor(): Promise<void> {
+  let project: Project;
+  try {
+    project = findProject();
+  } catch (error) {
+    console.log(`FAIL config: ${(error as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`OK   config: ${path.join(project.dir, CONFIG_FILE)}`);
+  let remote: Remote;
+  try {
+    remote = await Remote.connect(project.config);
+  } catch (error) {
+    console.log(`FAIL daemon: ${(error as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    console.log(`OK   daemon: ${remoteHost(project.config)}, version ${VERSION}`);
+    const { checks } = await remote.call('health', {});
+    for (const check of checks) console.log(`${check.ok ? 'OK  ' : 'FAIL'} ${check.label}: ${check.detail}`);
+    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+  } finally {
+    remote.close();
+  }
+}
