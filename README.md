@@ -10,7 +10,7 @@ fivem-testbed deploy ──── ssh ────►  relay ─► daemon (inte
 ```
 
 - SSH is the only channel. The package opens no network port.
-- The daemon runs in the desktop session of the logged-in user, so it can start FiveM and (later) take screenshots.
+- The daemon runs in the desktop session of the logged-in user, so it can start FiveM, take screenshots and send input.
 - Secrets (license key, RCON password) stay on the test host.
 
 > Status: early development. Use it on development servers only. RCON gives full control of the server.
@@ -66,6 +66,9 @@ npx fivem-testbed logs --follow
 | `client <launch\|quit\|status>` | Control FiveM. |
 | `logs [--follow] [--lines <n>]` | Show the server console. |
 | `rcon <command...>` | Run a server console command. |
+| `screenshot [--out <file>] [--max <px>]` | Save a PNG of the game window. |
+| `key <name>` | Press a key in the game window. |
+| `type <text...>` | Type text into the game window. |
 | `doctor` | Check the configuration, the daemon and the test host. |
 | `mcp` | Start the MCP server (stdio) for an AI agent. |
 
@@ -88,6 +91,11 @@ The MCP server runs on the dev host. One `deploy` call builds, uploads and resta
 | `client_command` | Client F8 console command (devcon). |
 | `read_console`, `wait_for_console` | Read or wait for server or client console lines. |
 | `bridge` | Operations inside the game through `testbed-bridge`. |
+| `screenshot` | PNG of the game window, scaled down (default longest side 900 px), optional crop. |
+| `window_status` | Game window found, focused, title, size. |
+| `press_key`, `type_text`, `mouse` | Keyboard (scan codes) and mouse input to the game window. |
+
+The window tools need an unlocked desktop on the test host. The daemon runs them through a PowerShell helper in the desktop session; no native module is installed.
 
 The prompt `test_resource` runs a full test of one resource and reports PASS or FAIL with evidence.
 
