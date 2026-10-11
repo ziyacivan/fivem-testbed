@@ -63,3 +63,16 @@ describe('redact', async () => {
     expect(redact('[rcon]  testbed tb-abc-1 client 1 eyJ0b2tlbiI6InNlY3JldCJ9\n')).toBe('[rcon]  testbed tb-abc-1 client 1 <redacted>\n');
   });
 });
+
+describe('key codes', async () => {
+  const { keyCode } = await import('../src/protocol/keys.ts');
+  it('maps plain and extended keys', () => {
+    expect(keyCode('T')).toEqual({ scan: 0x14, extended: false });
+    expect(keyCode('enter')).toEqual({ scan: 0x1c, extended: false });
+    expect(keyCode('up')).toEqual({ scan: 0x48, extended: true });
+  });
+  it('refuses an unknown key and a prototype key', () => {
+    expect(() => keyCode('constructor')).toThrow();
+    expect(() => keyCode('nope')).toThrow();
+  });
+});

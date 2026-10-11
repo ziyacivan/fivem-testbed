@@ -14,7 +14,9 @@ import { pipeName } from '../protocol/config.ts';
 import { isMethodName, type MethodName, methods, type Params, type Result } from '../protocol/messages.ts';
 import { APP_ERROR, auth, encode, LineSplitter, PROTOCOL_ERROR, request } from '../protocol/rpc.ts';
 import { VERSION } from '../protocol/version.ts';
+import { keyCode } from '../protocol/keys.ts';
 import { ConsoleBuffer } from './console-buffer.ts';
+import { WindowHelper } from './window-helper.ts';
 import { type HostPaths, hostPaths, readSecrets, requireSecret } from './paths.ts';
 import { killImage, killTree, processesWithPrefix, run } from './windows.ts';
 
@@ -61,6 +63,7 @@ class Daemon {
   private startedAt: number | undefined;
   private readonly uploads = new Map<string, string>();
   private readonly bridgeInbox = new Map<string, BridgeResult>();
+  private readonly window = new WindowHelper();
   private readonly devcon = new DevconConnection(({ channel, message }) => this.client.push(`[${channel}] ${message}`));
 
   private readonly paths: HostPaths;
@@ -388,6 +391,27 @@ class Daemon {
         return this.clientCommand(methods['client.command'].params.parse(params));
       case 'bridge':
         return this.bridge(methods.bridge.params.parse(params));
+      case 'window.status':
+        return this.window.request('status');
+      case 'window.screenshot': {
+        const p = methods['window.screenshot'].params.parse(params);
+        return this.window.request('screenshot', { maxSide: p.maxSide ?? 900, ...(p.crop ?? { x: 0, y: 0, width: 0, height: 0 }) }, 30_000);
+      }
+      case 'window.key': {
+        const p = methods['window.key'].params.parse(params);
+        const code = keyCode(p.key);
+        await this.window.request('key', { scan: code.scan, extended: code.extended, holdMs: p.holdMs ?? 50 }, 15_000);
+        return {};
+      }
+      case 'window.text': {
+        await this.window.request('text', methods['window.text'].params.parse(params));
+        return {};
+      }
+      case 'window.mouse': {
+        const p = methods['window.mouse'].params.parse(params);
+        await this.window.request(p.action, p);
+        return {};
+      }
       case 'rcon': {
         const { command } = methods.rcon.params.parse(params);
         return { output: await this.rcon(command) };
@@ -421,6 +445,7 @@ class Daemon {
   }
 
   shutdown(): void {
+    this.window.stop();
     if (this.fxserver?.pid) killTree(this.fxserver.pid);
   }
 }

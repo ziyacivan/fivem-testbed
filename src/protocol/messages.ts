@@ -67,6 +67,36 @@ export const methods = {
     ]),
     result: z.object({ ok: z.boolean(), data: z.unknown().optional(), error: z.string().optional() }),
   },
+  'window.status': {
+    params: empty,
+    result: z.object({
+      found: z.boolean(),
+      focused: z.boolean(),
+      title: z.string().optional(),
+      rect: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+    }),
+  },
+  'window.screenshot': {
+    params: z.object({
+      maxSide: z.number().int().min(64).max(4096).optional(),
+      crop: z.object({ x: z.number().int().min(0), y: z.number().int().min(0), width: z.number().int().min(1), height: z.number().int().min(1) }).optional(),
+    }),
+    result: z.object({ png: z.string(), width: z.number().int(), height: z.number().int() }),
+  },
+  'window.key': {
+    params: z.object({ key: z.string(), holdMs: z.number().int().min(0).max(10_000).optional() }),
+    result: empty,
+  },
+  'window.text': { params: z.object({ text: z.string().min(1).max(500) }), result: empty },
+  'window.mouse': {
+    params: z.discriminatedUnion('action', [
+      z.object({ action: z.literal('move'), dx: z.number().int(), dy: z.number().int() }),
+      z.object({ action: z.literal('position'), x: z.number().int().min(0), y: z.number().int().min(0) }),
+      z.object({ action: z.literal('click'), button: z.enum(['left', 'right']).default('left') }),
+      z.object({ action: z.literal('scroll'), amount: z.number().int().min(-50).max(50) }),
+    ]),
+    result: empty,
+  },
   rcon: { params: z.object({ command: z.string().min(1).max(512) }), result: output },
   'console.read': {
     params: z.object({
