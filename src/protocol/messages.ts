@@ -17,7 +17,17 @@ const serverStatus = z.object({
   startedAt: z.number().optional(),
 });
 
-const clientStatus = z.object({ running: z.boolean(), processes: z.array(z.string()) });
+// SPEC-0003 D2.
+export const clientStates = ['idle', 'starting', 'connecting', 'joined', 'failed', 'stopped'] as const;
+
+const clientStatus = z.object({
+  running: z.boolean(),
+  processes: z.array(z.string()),
+  state: z.enum(clientStates),
+  reason: z.string().optional(),
+  src: z.number().int().optional(),
+  progress: z.string().optional(),
+});
 
 export const bridgeSettings = z.object({
   events: z.array(z.string()).default([]),
@@ -49,7 +59,10 @@ export const methods = {
   'server.stop': { params: empty, result: serverStatus },
   'server.restart': { params: empty, result: serverStatus },
   'server.status': { params: empty, result: serverStatus },
-  'client.launch': { params: empty, result: clientStatus },
+  'client.launch': {
+    params: z.object({ wait: z.boolean().default(false), timeoutMs: z.number().int().min(1000).max(600_000).default(180_000) }),
+    result: clientStatus,
+  },
   'client.quit': { params: empty, result: clientStatus },
   'client.status': { params: empty, result: clientStatus },
   'client.command': {

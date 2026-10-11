@@ -8,10 +8,11 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { DevconConnection } from '../fivem/devcon.ts';
+import { ClientLogFollower, parseClientLogLine } from './client-log.ts';
 import { rcon } from '../fivem/rcon.ts';
 import { fileURLToPath } from 'node:url';
 import { pipeName } from '../protocol/config.ts';
-import { isMethodName, type MethodName, methods, type Params, type Result } from '../protocol/messages.ts';
+import { clientStates, isMethodName, type MethodName, methods, type Params, type Result } from '../protocol/messages.ts';
 import { APP_ERROR, auth, encode, LineSplitter, PROTOCOL_ERROR, request } from '../protocol/rpc.ts';
 import { VERSION } from '../protocol/version.ts';
 import { keyCode } from '../protocol/keys.ts';
@@ -65,6 +66,8 @@ class Daemon {
   private readonly uploads = new Map<string, string>();
   private readonly bridgeInbox = new Map<string, BridgeResult>();
   private readonly window = new WindowHelper();
+  private connection: { state: (typeof clientStates)[number]; reason?: string; src?: number; progress?: string } = { state: 'idle' };
+  private readonly clientLog = new ClientLogFollower((line) => this.onClientLogLine(line));
   private readonly devcon = new DevconConnection(({ channel, message }) => this.client.push(`[${channel}] ${message}`));
 
   private readonly paths: HostPaths;
@@ -286,24 +289,79 @@ class Daemon {
 
   private clientStatus(): Result<'client.status'> {
     const processes = processesWithPrefix('FiveM');
-    return { running: processes.length > 0, processes };
+    // `starting` has no process for a short time after the launch.
+    if (processes.length === 0 && (this.connection.state === 'connecting' || this.connection.state === 'joined')) {
+      this.connection = { state: 'stopped' };
+      this.clientLog.stop();
+    }
+    return { running: processes.length > 0, processes, ...this.connection };
+  }
+
+  // Client log lines go to the client console and update the connection state (SPEC-0003 D1, D2).
+  private onClientLogLine(line: string): void {
+    this.client.push(`[client-log] ${line}`);
+    const event = parseClientLogLine(line);
+    if (event.kind === 'error' && this.connection.state !== 'joined') {
+      this.connection = { state: 'failed', reason: event.reason };
+    } else if (event.kind === 'progress' && (this.connection.state === 'starting' || this.connection.state === 'connecting')) {
+      this.connection = { state: 'connecting', progress: event.text };
+    }
+  }
+
+  private async playerIds(): Promise<number[]> {
+    if (!this.fxserver) return [];
+    try {
+      const result = await this.bridge({ target: 'server', op: 'players', args: {} });
+      return ((result.data as { src: number }[] | undefined) ?? []).map((player) => player.src);
+    } catch {
+      return [];
+    }
   }
 
   // FiveM refuses a start from a service or a task. The shell opens the link (SPEC-0001 D6).
-  async launch(): Promise<Result<'client.launch'>> {
+  // With `wait`, returns when the client joined or failed (SPEC-0003 D3, D4).
+  async launch({ wait, timeoutMs }: z.output<typeof methods['client.launch']['params']>): Promise<Result<'client.launch'>> {
     if (this.clientStatus().running) return this.clientStatus();
+    // A quitting player keeps its old ID for a short time (SPEC-0003 F4). Only a new ID counts as joined.
+    const before = new Set(await this.playerIds());
+    const since = Date.now() - 2000;
+    this.connection = { state: 'starting' };
+    this.clientLog.start(since);
     const child = spawn('explorer.exe', [`fivem://connect/${this.state.connect}`], {
       detached: true,
       stdio: 'ignore',
     });
     child.unref();
-    for (let i = 0; i < 40 && !this.clientStatus().running; i++) await sleep(250);
-    return this.clientStatus();
+    for (let i = 0; i < 80 && processesWithPrefix('FiveM').length === 0; i++) await sleep(250);
+    if (processesWithPrefix('FiveM').length === 0) {
+      this.clientLog.stop();
+      this.connection = { state: 'failed', reason: 'FiveM did not start in 20 s' };
+      return this.clientStatus();
+    }
+    if (!wait) return this.clientStatus();
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.connection.state === 'failed' || this.connection.state === 'stopped') break;
+      const joined = (await this.playerIds()).find((id) => !before.has(id));
+      if (joined !== undefined) {
+        this.connection = { state: 'joined', src: joined };
+        break;
+      }
+      await sleep(2000);
+    }
+    const status = this.clientStatus();
+    if (status.state !== 'joined' && status.state !== 'failed' && status.state !== 'stopped') {
+      return { ...status, reason: `no join in ${Math.round(timeoutMs / 1000)} s` };
+    }
+    return status;
   }
 
   async quit(): Promise<Result<'client.quit'>> {
     killImage('FiveM.exe');
-    for (let i = 0; i < 20 && this.clientStatus().running; i++) await sleep(250);
+    for (let i = 0; i < 20 && processesWithPrefix('FiveM').length > 0; i++) await sleep(250);
+    this.clientLog.stop();
+    this.connection = { state: 'stopped' };
     return this.clientStatus();
   }
 
@@ -391,7 +449,7 @@ class Daemon {
       case 'server.status':
         return this.serverStatus();
       case 'client.launch':
-        return this.launch();
+        return this.launch(methods['client.launch'].params.parse(params));
       case 'client.quit':
         return this.quit();
       case 'client.status':

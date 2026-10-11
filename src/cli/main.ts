@@ -11,7 +11,7 @@ usage: fivem-testbed <command>
   host install [--local]                install this version on the test host and run host setup
   deploy [resource...]                  build, upload and restart resources
   server <start|stop|restart|status>
-  client <launch|quit|status>
+  client <launch [--no-wait]|quit|status>
   logs [--client] [--follow] [--lines <n>]
   rcon <command...>
   screenshot [--out <file>] [--max <px>] save a screenshot of the game window
@@ -40,7 +40,7 @@ export async function runCli([command, ...args]: string[]): Promise<void> {
     case 'server':
       return commands.server(findProject(), args[0]);
     case 'client':
-      return commands.client(findProject(), args[0]);
+      return commands.client(findProject(), args[0], args.slice(1));
     case 'rcon':
       return commands.rconCommand(findProject(), args);
     case 'screenshot':

@@ -94,9 +94,22 @@ export async function server({ config }: Project, action: string | undefined): P
   await withRemote(config, async (remote) => print(await remote.call(method[action as keyof typeof method], {})));
 }
 
-export async function client({ config }: Project, action: string | undefined): Promise<void> {
-  const method = { launch: 'client.launch', quit: 'client.quit', status: 'client.status' } as const;
-  if (!action || !Object.hasOwn(method, action)) throw new UsageError('usage: fivem-testbed client <launch|quit|status>');
+export async function client({ config }: Project, action: string | undefined, args: string[] = []): Promise<void> {
+  if (action === 'launch') {
+    // Waits for the join or the connection error, unless `--no-wait` (SPEC-0003 D4, D6).
+    const wait = !args.includes('--no-wait');
+    await withRemote(config, async (remote) => {
+      const status = await remote.call('client.launch', { wait });
+      print(status);
+      if (wait && status.state !== 'joined') {
+        console.error(`client did not join: ${status.reason ?? status.state}`);
+        process.exitCode = 1;
+      }
+    });
+    return;
+  }
+  const method = { quit: 'client.quit', status: 'client.status' } as const;
+  if (!action || !Object.hasOwn(method, action)) throw new UsageError('usage: fivem-testbed client <launch [--no-wait]|quit|status>');
   await withRemote(config, async (remote) => print(await remote.call(method[action as keyof typeof method], {})));
 }
 

@@ -101,10 +101,16 @@ export async function runMcp(): Promise<void> {
   server.registerTool(
     'client_control',
     {
-      description: 'Launch FiveM on the test host and join the test server, quit it, or read its state. A join takes about 1 to 2 minutes.',
-      inputSchema: { action: z.enum(['launch', 'quit', 'status']) },
+      description:
+        'Launch FiveM on the test host and wait until it joins the test server (state joined, with src) or fails ' +
+        '(state failed, with the reason from the client log). Also quit, or read the state. A join takes about 1 to 2 minutes.',
+      inputSchema: { action: z.enum(['launch', 'quit', 'status']), timeoutMs: z.number().int().min(1000).max(600_000).optional() },
     },
-    tool(async ({ action }: { action: 'launch' | 'quit' | 'status' }) => session.call(`client.${action}`, {})),
+    tool(async ({ action, timeoutMs }: { action: 'launch' | 'quit' | 'status'; timeoutMs?: number | undefined }) =>
+      action === 'launch'
+        ? session.call('client.launch', { wait: true, ...(timeoutMs ? { timeoutMs } : {}) })
+        : session.call(`client.${action}`, {}),
+    ),
   );
 
   server.registerTool(
@@ -269,7 +275,7 @@ export async function runMcp(): Promise<void> {
               `2. Call deploy with resources ["${resource}"]. If the server is stopped, call server_control start.`,
               `3. wait_for_console (server) for "Started resource ${resource}" or an error line.`,
               '4. read_console (server) and look for errors and warnings of the resource.',
-              '5. client_control status. If FiveM does not run, launch it and wait until bridge server players lists a player.',
+              '5. client_control status. If the state is not joined, call client_control launch. On state failed, stop and report the reason.',
               '6. read_console (client) and look for script errors of the resource.',
               `7. Run the scenario with bridge ops and console tools.${expectations ? ` Expectations: ${expectations}` : ''}`,
               '8. Report PASS or FAIL for each expectation, with the console lines or bridge results as evidence. Say so when you cannot verify a step.',
