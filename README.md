@@ -67,6 +67,49 @@ npx fivem-testbed logs --follow
 | `logs [--follow] [--lines <n>]` | Show the server console. |
 | `rcon <command...>` | Run a server console command. |
 | `doctor` | Check the configuration, the daemon and the test host. |
+| `mcp` | Start the MCP server (stdio) for an AI agent. |
+
+## AI agents (MCP)
+
+Add the server to the project, for example in `.mcp.json`:
+
+```json
+{ "mcpServers": { "fivem-testbed": { "command": "npx", "args": ["fivem-testbed", "mcp"] } } }
+```
+
+The MCP server runs on the dev host. One `deploy` call builds, uploads and restarts.
+
+| Tool | Action |
+| ---- | ------ |
+| `doctor` | Check the environment. Call first. |
+| `deploy` | Build, upload and restart resources. |
+| `server_control`, `client_control` | Start, stop, restart, launch, quit, status. |
+| `server_command` | Server console command (RCON). |
+| `client_command` | Client F8 console command (devcon). |
+| `read_console`, `wait_for_console` | Read or wait for server or client console lines. |
+| `bridge` | Operations inside the game through `testbed-bridge`. |
+
+The prompt `test_resource` runs a full test of one resource and reports PASS or FAIL with evidence.
+
+## testbed-bridge
+
+The daemon installs the resource `testbed-bridge` and adds `ensure testbed-bridge` to `server.cfg`.
+
+| Side | Operations |
+| ---- | ---------- |
+| Server | `ping`, `players`, `call_export {resource, method, args}`, `trigger_event {event, args, player?}` |
+| Client | `ping`, `position`, `teleport {x, y, z, heading?}`, `freeze {on}`, `call_native {name, args}`, `nui_callback {resource, endpoint, payload}` |
+
+`nui_callback` calls the NUI callback of another resource through the NUI page of the bridge, as a browser click would.
+It does not work for a resource that sets `nui_callback_strict_mode` in its manifest.
+
+Allowlists in `fivem-testbed.config.json`:
+
+```json
+{ "bridge": { "events": ["my:event"], "exports": ["myres:*"], "natives": [] } }
+```
+
+An empty `natives` list allows all natives. Empty `events` and `exports` lists allow none.
 
 ## License
 
