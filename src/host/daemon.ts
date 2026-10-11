@@ -606,10 +606,11 @@ export async function runDaemon(root: string): Promise<void> {
   }
   process.title = 'fivem-testbed daemon';
   console.log(`fivem-testbed ${VERSION} daemon: listening on ${pipe}, root ${paths.root}`);
-  const exit = () => {
+  const exit = (signal: string) => {
+    console.log(`daemon: stopped by ${signal}`);
     daemon.shutdown();
     process.exit(0);
   };
-  process.on('SIGINT', exit);
-  process.on('SIGTERM', exit);
+  process.on('SIGINT', () => exit('SIGINT'));
+  process.on('SIGTERM', () => exit('SIGTERM'));
 }

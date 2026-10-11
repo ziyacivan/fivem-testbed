@@ -14,6 +14,10 @@ async function main(argv: string[]): Promise<void> {
       return runSetup(option(rest, '--root'), option(rest, '--build'));
     }
     if (sub === 'daemon') {
+      const { runSupervisor } = await import('./host/supervisor.ts');
+      return runSupervisor(option(rest, '--root'));
+    }
+    if (sub === 'daemon-worker') {
       const { runDaemon } = await import('./host/daemon.ts');
       return runDaemon(option(rest, '--root'));
     }

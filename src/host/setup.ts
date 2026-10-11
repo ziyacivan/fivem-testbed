@@ -39,16 +39,18 @@ async function installFxserver(paths: ReturnType<typeof hostPaths>, build: strin
 function registerDaemonTask(root: string): void {
   const entry = fileURLToPath(new URL('../main.js', import.meta.url));
   const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+  const conhost = path.join(process.env.WINDIR ?? 'C:\\Windows', 'System32', 'conhost.exe');
   const script = `
 $ErrorActionPreference = 'Stop'
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute ${quote(process.execPath)} -Argument ${quote(`"${entry}" host daemon --root "${root}"`)}
+# A headless console: no window that a person can close by mistake.
+$action = New-ScheduledTaskAction -Execute ${quote(conhost)} -Argument ${quote(`--headless "${process.execPath}" "${entry}" host daemon --root "${root}"`)}
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName ${quote(DAEMON_TASK)} -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Stop-ScheduledTask -TaskName ${quote(DAEMON_TASK)} -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*fivem-testbed*host daemon*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*fivem-testbed*host daemon*' } | Sort-Object { $_.CommandLine -like '*daemon-worker*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 Start-ScheduledTask -TaskName ${quote(DAEMON_TASK)}
 `;
