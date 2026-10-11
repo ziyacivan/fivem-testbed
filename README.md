@@ -78,7 +78,7 @@ List the required secrets in `fivem-testbed.config.json`, so `doctor` and `serve
 | `host install [--local]` | Install this version on the test host and run `host setup`. `--local` installs from a local `npm pack`. |
 | `deploy [resource...]` | Run the build command, upload the resources, `refresh` and `ensure`. |
 | `server <start\|stop\|restart\|status>` | Control FXServer. |
-| `client <launch\|quit\|status>` | Control FiveM. |
+| `client <launch [--no-wait]\|quit\|status>` | Control FiveM. `launch` waits until the client joins (`joined`, with its server ID) or fails (`failed`, with the reason from the client log), and exits with code 1 on failure. |
 | `logs [--follow] [--lines <n>]` | Show the server console. |
 | `rcon <command...>` | Run a server console command. |
 | `screenshot [--out <file>] [--max <px>]` | Save a PNG of the game window. |
@@ -86,6 +86,11 @@ List the required secrets in `fivem-testbed.config.json`, so `doctor` and `serve
 | `type <text...>` | Type text into the game window. |
 | `doctor` | Check the configuration, the daemon and the test host. |
 | `mcp` | Start the MCP server (stdio) for an AI agent. |
+
+## Client state
+
+The daemon follows the FiveM client log while FiveM runs. Each line goes to the client console with the prefix `[client-log]`, so `read_console` and `wait_for_console` see connection errors before the game console exists.
+`client status` shows `state`: `idle`, `starting`, `connecting`, `joined`, `failed` (with `reason`) or `stopped`.
 
 ## AI agents (MCP)
 
