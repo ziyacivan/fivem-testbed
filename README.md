@@ -55,6 +55,21 @@ npx fivem-testbed client launch
 npx fivem-testbed logs --follow
 ```
 
+## Extra secrets
+
+A project can need more secrets, for example a database connection string. Put them in `secrets.env` on the test host:
+
+```
+CFG_my_database_url=postgres://user:password@127.0.0.1:5432/db
+```
+
+Before each start, the daemon writes `set my_database_url "..."` into `secrets.cfg` (never `setr`). The name must be a valid convar name; the value must not contain `"` or a line break.
+List the required secrets in `fivem-testbed.config.json`, so `doctor` and `server start` report a missing one:
+
+```json
+{ "secrets": ["my_database_url"] }
+```
+
 ## Commands
 
 | Command | Action |
