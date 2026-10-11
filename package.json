@@ -1,0 +1,41 @@
+{
+  "name": "fivem-testbed",
+  "version": "0.1.0",
+  "description": "Develop FiveM resources on macOS, test them in-game on a Windows PC on your LAN",
+  "license": "MIT",
+  "author": "Yusuf Ziya Civan (https://github.com/ziyacivan)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ziyacivan/fivem-testbed.git"
+  },
+  "type": "module",
+  "bin": {
+    "fivem-testbed": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "bridge",
+    "schema.json"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "depcruise src --config .dependency-cruiser.cjs",
+    "test": "vitest run",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dependency-cruiser": "^18.5.0",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.3"
+  }
+}
