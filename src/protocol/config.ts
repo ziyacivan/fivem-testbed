@@ -19,6 +19,13 @@ export const projectConfig = z.object({
   build: z.string().optional(),
   serverCfg: z.string().default('fivem-testbed/server.cfg'),
   resources: z.array(resourceEntry).default([]),
+  bridge: z
+    .object({
+      events: z.array(z.string()).default([]),
+      exports: z.array(z.string()).default([]),
+      natives: z.array(z.string()).default([]),
+    })
+    .default({ events: [], exports: [], natives: [] }),
 });
 
 export type ProjectConfig = z.infer<typeof projectConfig>;

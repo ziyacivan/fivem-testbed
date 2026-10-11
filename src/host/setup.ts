@@ -48,7 +48,8 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName ${quote(DAEMON_TASK)} -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Stop-ScheduledTask -TaskName ${quote(DAEMON_TASK)} -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*fivem-testbed*host daemon*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
 Start-ScheduledTask -TaskName ${quote(DAEMON_TASK)}
 `;
   const result = powershell(script);

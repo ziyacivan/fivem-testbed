@@ -19,6 +19,15 @@ const serverStatus = z.object({
 
 const clientStatus = z.object({ running: z.boolean(), processes: z.array(z.string()) });
 
+export const bridgeSettings = z.object({
+  events: z.array(z.string()).default([]),
+  exports: z.array(z.string()).default([]),
+  natives: z.array(z.string()).default([]),
+});
+
+export const bridgeServerOps = ['ping', 'players', 'call_export', 'trigger_event'] as const;
+export const bridgeClientOps = ['ping', 'position', 'teleport', 'freeze', 'call_native', 'nui_callback'] as const;
+
 const healthCheck = z.object({ ok: z.boolean(), label: z.string(), detail: z.string() });
 
 export const methods = {
@@ -28,7 +37,7 @@ export const methods = {
   },
   health: { params: empty, result: z.object({ checks: z.array(healthCheck) }) },
   'server.configure': {
-    params: z.object({ serverCfg: z.string(), connect: z.string() }),
+    params: z.object({ serverCfg: z.string(), connect: z.string(), bridge: bridgeSettings }),
     result: empty,
   },
   'server.start': { params: empty, result: serverStatus },
@@ -38,6 +47,26 @@ export const methods = {
   'client.launch': { params: empty, result: clientStatus },
   'client.quit': { params: empty, result: clientStatus },
   'client.status': { params: empty, result: clientStatus },
+  'client.command': {
+    params: z.object({
+      command: z.string().min(1).max(512),
+      timeoutMs: z.number().int().min(100).max(60_000).optional(),
+      quietMs: z.number().int().min(50).max(10_000).optional(),
+    }),
+    result: z.object({ lines: z.array(z.string()) }),
+  },
+  bridge: {
+    params: z.discriminatedUnion('target', [
+      z.object({ target: z.literal('server'), op: z.enum(bridgeServerOps), args: z.record(z.string(), z.unknown()).default({}) }),
+      z.object({
+        target: z.literal('client'),
+        src: z.number().int().min(1),
+        op: z.enum(bridgeClientOps),
+        args: z.record(z.string(), z.unknown()).default({}),
+      }),
+    ]),
+    result: z.object({ ok: z.boolean(), data: z.unknown().optional(), error: z.string().optional() }),
+  },
   rcon: { params: z.object({ command: z.string().min(1).max(512) }), result: output },
   'console.read': {
     params: z.object({
@@ -74,7 +103,7 @@ export const methods = {
 
 export type Methods = typeof methods;
 export type MethodName = keyof Methods;
-export type Params<M extends MethodName> = z.infer<Methods[M]['params']>;
+export type Params<M extends MethodName> = z.input<Methods[M]['params']>;
 export type Result<M extends MethodName> = z.infer<Methods[M]['result']>;
 
 export function isMethodName(name: string): name is MethodName {

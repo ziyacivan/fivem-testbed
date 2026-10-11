@@ -56,3 +56,10 @@ describe('protocol helpers', () => {
     expect(pipeName('Yusuf Z')).toBe('\\\\.\\pipe\\fivem-testbed-yusuf_z');
   });
 });
+
+describe('redact', async () => {
+  const { redact } = await import('../src/host/daemon.ts');
+  it('hides the bridge payload', () => {
+    expect(redact('[rcon]  testbed tb-abc-1 client 1 eyJ0b2tlbiI6InNlY3JldCJ9\n')).toBe('[rcon]  testbed tb-abc-1 client 1 <redacted>\n');
+  });
+});

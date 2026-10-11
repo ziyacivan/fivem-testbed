@@ -3,10 +3,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
+import type { z } from 'zod';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { DevconConnection } from '../fivem/devcon.ts';
 import { rcon } from '../fivem/rcon.ts';
+import { fileURLToPath } from 'node:url';
 import { pipeName } from '../protocol/config.ts';
 import { isMethodName, type MethodName, methods, type Params, type Result } from '../protocol/messages.ts';
 import { APP_ERROR, auth, encode, LineSplitter, PROTOCOL_ERROR, request } from '../protocol/rpc.ts';
@@ -21,12 +24,44 @@ interface State {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const BRIDGE_SOURCE = fileURLToPath(new URL('../../bridge', import.meta.url));
+const BRIDGE_CATEGORY = '[fivem-testbed]';
+const BRIDGE_NAME = 'testbed-bridge';
+
+type BridgeResult = Result<'bridge'>;
+
+// Hides the payload of bridge requests, because it carries the token (SPEC-0001 S3).
+export function redact(text: string): string {
+  return text.replace(/(testbed tb-[0-9a-z-]+ \w+ \S+ )\S+/g, '$1<redacted>');
+}
+
+function cfgList(values: string[]): string {
+  return `"${values.filter((value) => /^[\w:*.-]+$/.test(value)).join(',')}"`;
+}
+
+// Parses `TESTBED_RESULT <id> <json>` lines of an RCON reply.
+function bridgeResults(output: string): Map<string, BridgeResult> {
+  const results = new Map<string, BridgeResult>();
+  for (const line of output.split(/\r?\n/)) {
+    const match = /TESTBED_RESULT (tb-[0-9a-z-]+) (.*)$/.exec(line);
+    if (!match?.[1] || !match[2]) continue;
+    try {
+      results.set(match[1], JSON.parse(match[2]) as BridgeResult);
+    } catch {
+      results.set(match[1], { ok: false, error: `unreadable bridge result: ${match[2].slice(0, 80)}` });
+    }
+  }
+  return results;
+}
+
 class Daemon {
   private readonly server = new ConsoleBuffer();
   private readonly client = new ConsoleBuffer();
   private fxserver: ChildProcess | undefined;
   private startedAt: number | undefined;
   private readonly uploads = new Map<string, string>();
+  private readonly bridgeInbox = new Map<string, BridgeResult>();
+  private readonly devcon = new DevconConnection(({ channel, message }) => this.client.push(`[${channel}] ${message}`));
 
   private readonly paths: HostPaths;
 
@@ -73,17 +108,33 @@ class Daemon {
     };
   }
 
-  configure({ serverCfg, connect }: Params<'server.configure'>): Result<'server.configure'> {
+  configure({ serverCfg, connect, bridge }: z.output<typeof methods['server.configure']['params']>): Result<'server.configure'> {
     const port = connect.split(':')[1];
     const header = [
       '# Written by fivem-testbed. Edit the server.cfg of the project, not this file.',
       `endpoint_add_tcp "127.0.0.1:${port}"`,
       `endpoint_add_udp "127.0.0.1:${port}"`,
       'exec secrets.cfg',
+      // The daemon talks to the server over RCON on 127.0.0.1 only. The default limit (0.2/s, burst 5)
+      // drops bridge polls and then blocks RCON for 15 s (citizen-server-impl RconOutOfBand.h).
+      'set rateLimiter_rcon_rate 50',
+      'set rateLimiter_rcon_burst 100',
+      // Do not echo RCON commands: a bridge request carries the token (SPEC-0001 S3).
+      'con_addChannelFilter rcon noprint',
+      '',
+    ].join('\n');
+    const footer = [
+      '',
+      '# testbed-bridge (fivem-testbed).',
+      'set testbed_enabled true',
+      `set testbed_event_allowlist ${cfgList(bridge.events)}`,
+      `set testbed_export_allowlist ${cfgList(bridge.exports)}`,
+      `set testbed_native_allowlist ${cfgList(bridge.natives)}`,
+      `ensure ${BRIDGE_NAME}`,
       '',
     ].join('\n');
     fs.mkdirSync(this.paths.serverData, { recursive: true });
-    fs.writeFileSync(this.paths.serverCfg, `${header}${serverCfg.replace(/\r\n/g, '\n')}\n`);
+    fs.writeFileSync(this.paths.serverCfg, `${header}${serverCfg.replace(/\r\n/g, '\n')}\n${footer}`);
     fs.writeFileSync(this.paths.state, JSON.stringify({ connect } satisfies State));
     return {};
   }
@@ -93,6 +144,7 @@ class Daemon {
       '# Written by fivem-testbed from secrets.env before each start.',
       `set sv_licenseKey "${requireSecret(this.paths.secrets, 'LICENSE_KEY')}"`,
       `set rcon_password "${requireSecret(this.paths.secrets, 'RCON_PASSWORD')}"`,
+      `set testbed_token "${requireSecret(this.paths.secrets, 'BRIDGE_TOKEN')}"`,
     ];
     fs.writeFileSync(this.paths.secretsCfg, `${lines.join('\n')}\n`, { mode: 0o600 });
   }
@@ -106,6 +158,7 @@ class Daemon {
     if (!fs.existsSync(exe)) throw new Error(`${exe} does not exist; run \`fivem-testbed host setup\``);
     if (!fs.existsSync(this.paths.serverCfg)) throw new Error('no server.cfg; run `fivem-testbed deploy` first');
     this.writeSecretsCfg();
+    this.installBridge();
     fs.mkdirSync(this.paths.logs, { recursive: true });
     if (fs.existsSync(this.paths.serverLog)) {
       fs.renameSync(this.paths.serverLog, path.join(this.paths.logs, 'server.prev.log'));
@@ -122,8 +175,9 @@ class Daemon {
     for (const stream of [child.stdout, child.stderr]) {
       stream.setEncoding('utf8');
       stream.on('data', (chunk: string) => {
-        log.write(chunk);
-        this.server.write(chunk);
+        const safe = redact(chunk);
+        log.write(safe);
+        this.server.write(safe);
       });
     }
     child.on('exit', (code) => {
@@ -155,6 +209,69 @@ class Daemon {
     if (this.fxserver === child && child.pid) killTree(child.pid);
     for (let i = 0; i < 20 && this.fxserver === child; i++) await sleep(250);
     return this.serverStatus();
+  }
+
+  // The bridge always has the version of the running package (SPEC-0001 D8).
+  private installBridge(): void {
+    const target = path.join(this.paths.resources, BRIDGE_CATEGORY, BRIDGE_NAME);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(BRIDGE_SOURCE, target, { recursive: true });
+  }
+
+  async bridge(params: z.output<typeof methods.bridge.params>): Promise<BridgeResult> {
+    if (!this.fxserver) throw new Error('the server is not running');
+    const id = `tb-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
+    const token = requireSecret(this.paths.secrets, 'BRIDGE_TOKEN');
+    const payload = Buffer.from(JSON.stringify({ ...params.args, op: params.op, token })).toString('base64');
+    const player = params.target === 'client' ? String(params.src) : '-';
+    const output = await this.rcon(`testbed ${id} ${params.target} ${player} ${payload}`);
+    const direct = bridgeResults(output).get(id);
+    if (direct) return direct;
+    if (!output.includes(`TESTBED_ACK ${id}`)) throw new Error(`no bridge answer: ${output.trim().slice(0, 200)}`);
+    const deadline = Date.now() + 15_000;
+    let delay = 100;
+    while (Date.now() < deadline) {
+      await sleep(delay);
+      delay = Math.min(delay * 1.5, 1000);
+      const pollId = `tb-poll-${randomBytes(4).toString('hex')}`;
+      const poll = Buffer.from(JSON.stringify({ op: 'poll', token })).toString('base64');
+      const queued = bridgeResults(await this.rcon(`testbed ${pollId} server - ${poll}`)).get(pollId);
+      for (const entry of (queued?.data as { id: string; result: BridgeResult }[] | undefined) ?? []) {
+        this.bridgeInbox.set(entry.id, entry.result);
+      }
+      const result = this.bridgeInbox.get(id);
+      if (result) {
+        this.bridgeInbox.delete(id);
+        return result;
+      }
+    }
+    throw new Error(`client ${player} gave no bridge answer in 15 s`);
+  }
+
+  // Connects to devcon while FiveM runs, so the client console is available (SPEC-0001 section 9.1).
+  watchDevcon(): void {
+    setInterval(() => {
+      if (this.devcon.connected || !this.clientStatus().running) return;
+      this.devcon.connect().then(
+        () => this.client.push('[fivem-testbed] devcon connected'),
+        () => undefined,
+      );
+    }, 3000).unref();
+  }
+
+  async clientCommand({ command, timeoutMs = 5000, quietMs = 400 }: Params<'client.command'>): Promise<Result<'client.command'>> {
+    if (!this.devcon.connected) await this.devcon.connect();
+    const after = this.client.cursor;
+    this.devcon.send(command);
+    const deadline = Date.now() + timeoutMs;
+    let seen = after;
+    while (Date.now() < deadline) {
+      const line = await this.client.wait(/./, { after: seen, timeoutMs: quietMs });
+      if (!line) break;
+      seen = this.client.cursor;
+    }
+    return { lines: this.client.read({ after, limit: 5000 }).map((line) => line.text) };
   }
 
   private clientStatus(): Result<'client.status'> {
@@ -267,6 +384,10 @@ class Daemon {
         return this.quit();
       case 'client.status':
         return this.clientStatus();
+      case 'client.command':
+        return this.clientCommand(methods['client.command'].params.parse(params));
+      case 'bridge':
+        return this.bridge(methods.bridge.params.parse(params));
       case 'rcon': {
         const { command } = methods.rcon.params.parse(params);
         return { output: await this.rcon(command) };
@@ -356,18 +477,41 @@ function serveConnection(socket: net.Socket, daemon: Daemon, token: Buffer): voi
 
 export async function runDaemon(root: string): Promise<void> {
   const paths = hostPaths(root);
-  fs.mkdirSync(paths.root, { recursive: true });
+  fs.mkdirSync(paths.logs, { recursive: true });
+  // The task has no visible output, so the daemon writes its own log.
+  const daemonLog = path.join(paths.logs, 'daemon.log');
+  const write = (level: string, args: unknown[]) =>
+    fs.appendFileSync(daemonLog, `${new Date().toISOString()} ${level} ${args.map(String).join(' ')}\n`);
+  console.log = (...args: unknown[]) => write('info', args);
+  console.error = (...args: unknown[]) => write('error', args);
+  process.on('uncaughtException', (error) => {
+    write('fatal', [error.stack ?? error]);
+    process.exit(1);
+  });
   const token = randomBytes(32).toString('hex');
   fs.writeFileSync(paths.token, token, { mode: 0o600 });
   run('icacls', [paths.token, '/inheritance:r', '/grant:r', `${os.userInfo().username}:F`, 'SYSTEM:F']);
 
   const daemon = new Daemon(paths);
+  daemon.watchDevcon();
   const pipe = pipeName(os.userInfo().username);
   const server = net.createServer((socket) => serveConnection(socket, daemon, Buffer.from(token)));
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(pipe, () => resolve());
-  });
+  // A previous daemon can hold the pipe for a short time after it stops.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(pipe, () => {
+          server.off('error', reject);
+          resolve();
+        });
+      });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt >= 30) throw error;
+      await sleep(500);
+    }
+  }
   process.title = 'fivem-testbed daemon';
   console.log(`fivem-testbed ${VERSION} daemon: listening on ${pipe}, root ${paths.root}`);
   const exit = () => {
