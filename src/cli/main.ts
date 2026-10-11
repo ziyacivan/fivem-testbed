@@ -15,6 +15,7 @@ usage: fivem-testbed <command>
   logs [--client] [--follow] [--lines <n>]
   rcon <command...>
   doctor                                check the test environment
+  mcp                                   start the MCP server (stdio)
 
 on the test host:
   host setup --root <dir> --build <build>
@@ -27,6 +28,10 @@ export async function runCli([command, ...args]: string[]): Promise<void> {
       return commands.init();
     case 'doctor':
       return commands.doctor();
+    case 'mcp': {
+      const { runMcp } = await import('../mcp/server.ts');
+      return runMcp();
+    }
     case 'deploy':
       return commands.deploy(findProject(), args);
     case 'server':

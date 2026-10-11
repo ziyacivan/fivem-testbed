@@ -1,6 +1,5 @@
 // Dev host commands (SPEC-0001 section 11).
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,34 +8,16 @@ import { CONFIG_FILE, type ProjectConfig } from '../protocol/config.ts';
 import type { ConsoleTarget } from '../protocol/messages.ts';
 import { VERSION } from '../protocol/version.ts';
 import { Remote, remoteHost } from '../remote/client.ts';
+import { runDeploy, UsageError } from './deploy.ts';
 import { findProject, type Project } from './project.ts';
 
-const CHUNK_BYTES = 512 * 1024;
-
-export class UsageError extends Error {}
+export { UsageError } from './deploy.ts';
 
 function exec(command: string, args: string[], options: { cwd?: string; shell?: boolean } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: 'inherit', ...options });
     child.on('error', reject);
     child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${command} exited with code ${code}`))));
-  });
-}
-
-function tarFolder(dir: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(dir)) {
-      reject(new Error(`${dir} does not exist`));
-      return;
-    }
-    const tar = spawn('tar', ['-c', '--no-xattrs', '-f', '-', '-C', dir, '.'], {
-      stdio: ['ignore', 'pipe', 'inherit'],
-      env: { ...process.env, COPYFILE_DISABLE: '1' },
-    });
-    const chunks: Buffer[] = [];
-    tar.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
-    tar.on('error', reject);
-    tar.on('close', (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`tar exited with code ${code}`))));
   });
 }
 
@@ -103,26 +84,8 @@ export async function hostInstall({ config }: Project, local: boolean): Promise<
   await exec('ssh', ['-T', host, `fivem-testbed host setup --root ${config.root} --build ${config.fxserver.build}`]);
 }
 
-export async function deploy({ dir, config }: Project, only: string[]): Promise<void> {
-  if (config.build) await exec(config.build, [], { cwd: dir, shell: true });
-  const resources = only.length > 0 ? config.resources.filter((r) => only.includes(r.name)) : config.resources;
-  const unknown = only.filter((name) => !config.resources.some((r) => r.name === name));
-  if (unknown.length > 0) throw new UsageError(`unknown resource: ${unknown.join(', ')}`);
-  await withRemote(config, async (remote) => {
-    for (const resource of resources) {
-      const archive = await tarFolder(path.resolve(dir, resource.path));
-      const uploadId = randomUUID();
-      for (let offset = 0; offset < archive.length; offset += CHUNK_BYTES) {
-        await remote.call('resource.upload', { uploadId, chunk: archive.subarray(offset, offset + CHUNK_BYTES).toString('base64') });
-      }
-      await remote.call('resource.commit', { uploadId, category: resource.category, name: resource.name });
-      console.log(`deployed ${resource.category}/${resource.name} (${archive.length} bytes)`);
-    }
-    const serverCfg = fs.readFileSync(path.resolve(dir, config.serverCfg), 'utf8');
-    await remote.call('server.configure', { serverCfg, connect: config.connect });
-    const names = resources.filter((r) => r.reload ?? r.category === '[project]').map((r) => r.name);
-    print((await remote.call('resource.reload', { names })).output);
-  });
+export async function deploy(project: Project, only: string[]): Promise<void> {
+  await withRemote(project.config, (remote) => runDeploy(project, remote, only, (line) => console.log(line)));
 }
 
 export async function server({ config }: Project, action: string | undefined): Promise<void> {
