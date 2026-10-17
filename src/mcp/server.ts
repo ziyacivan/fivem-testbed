@@ -8,6 +8,7 @@ import { bridgeClientOps, bridgeServerOps, type MethodName, type Params, type Re
 import { KEY_NAMES } from '../protocol/keys.ts';
 import { VERSION } from '../protocol/version.ts';
 import { Remote } from '../remote/client.ts';
+import { checkSteps, DEFAULT_SCREENSHOT_SIDE, runSteps, stepSchema } from './steps.ts';
 
 type ToolResult = {
   content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
@@ -191,8 +192,9 @@ export async function runMcp(): Promise<void> {
     'screenshot',
     {
       description:
-        'PNG of the game window on the test host, scaled down so the longest side is maxSide (default 900). ' +
-        'Each image costs many tokens for the rest of the session: prefer console and bridge checks, and use a small maxSide or a crop.',
+        `PNG of the game window on the test host, scaled down so the longest side is maxSide (default ${DEFAULT_SCREENSHOT_SIDE}). ` +
+        'Each image costs many tokens for the rest of the session: prefer console and bridge checks, and use a small maxSide or a crop. ' +
+        'To see the result of an input, put one screenshot step at the end of a `steps` call instead of a separate call.',
       inputSchema: {
         maxSide: z.number().int().min(64).max(4096).optional(),
         crop: z.object({ x: z.number().int(), y: z.number().int(), width: z.number().int(), height: z.number().int() }).optional(),
@@ -201,7 +203,7 @@ export async function runMcp(): Promise<void> {
     },
     async (args: Params<'window.screenshot'>): Promise<ToolResult> => {
       try {
-        const shot = await session.call('window.screenshot', args);
+        const shot = await session.call('window.screenshot', { ...args, maxSide: args.maxSide ?? DEFAULT_SCREENSHOT_SIDE });
         return {
           content: [
             { type: 'image', data: shot.png, mimeType: 'image/png' },
@@ -223,7 +225,7 @@ export async function runMcp(): Promise<void> {
   server.registerTool(
     'press_key',
     {
-      description: `Press one key in the game window (scan code input). Keys: ${KEY_NAMES.join(', ')}.`,
+      description: `Press one key in the game window (scan code input). Keys: ${KEY_NAMES.join(', ')}. Each call is one model turn: for a sequence of inputs use \`steps\`.`,
       inputSchema: { key: z.string(), holdMs: z.number().int().min(0).max(10_000).optional() },
     },
     tool(async (args: Params<'window.key'>) => session.call('window.key', args)),
@@ -232,7 +234,7 @@ export async function runMcp(): Promise<void> {
   server.registerTool(
     'type_text',
     {
-      description: 'Type text into the game window as Unicode key events, for example into the chat input or the F8 console.',
+      description: 'Type text into the game window as Unicode key events, for example into the chat input or the F8 console. For text between key presses use `steps`.',
       inputSchema: { text: z.string().min(1).max(500) },
     },
     tool(async (args: Params<'window.text'>) => session.call('window.text', args)),
@@ -255,6 +257,39 @@ export async function runMcp(): Promise<void> {
       },
     },
     tool(async (args: Record<string, unknown>) => session.call('window.mouse', args as Params<'window.mouse'>)),
+  );
+
+  server.registerTool(
+    'steps',
+    {
+      description:
+        'Run up to 30 test actions in order in ONE call (each tool call costs a whole model turn, so prefer this for any flow of inputs). ' +
+        'Steps: {do:"key",key,holdMs?}, {do:"keys",keys:[...],gapMs?} (a sequence), {do:"text",text}, {do:"mouse",action,...} (arguments of the mouse tool), ' +
+        '{do:"wait",ms}, {do:"command",target:"client"|"server",command}, {do:"console",target,pattern?,limit?} (newest matching lines), ' +
+        `{do:"screenshot",maxSide?,crop?} (at most 3 per call, default maxSide ${DEFAULT_SCREENSHOT_SIDE}). ` +
+        'It stops at the first failed step and reports each step. Example: open chat, type a command, send it, look: ' +
+        '[{do:"key",key:"t"},{do:"text",text:"/hud"},{do:"key",key:"enter"},{do:"wait",ms:300},{do:"screenshot",crop:{x:0,y:0,width:960,height:540}}].',
+      inputSchema: { steps: z.array(stepSchema).min(1).max(30) },
+    },
+    async ({ steps }): Promise<ToolResult> => {
+      const refusal = checkSteps(steps);
+      if (refusal !== undefined) return { ...text(refusal), isError: true };
+      try {
+        const outcome = await runSteps(steps, {
+          call: (method, params) => session.call(method, params),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        });
+        return {
+          content: [
+            { type: 'text', text: outcome.lines.join('\n') },
+            ...outcome.images.map((image) => ({ type: 'image' as const, data: image.png, mimeType: 'image/png' })),
+          ],
+          ...(outcome.ok ? {} : { isError: true }),
+        };
+      } catch (error) {
+        return { ...text(error instanceof Error ? error.message : String(error)), isError: true };
+      }
+    },
   );
 
   server.registerPrompt(
