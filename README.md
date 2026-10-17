@@ -111,9 +111,10 @@ The MCP server runs on the dev host. One `deploy` call builds, uploads and resta
 | `client_command` | Client F8 console command (devcon). |
 | `read_console`, `wait_for_console` | Read or wait for server or client console lines. |
 | `bridge` | Operations inside the game through `testbed-bridge`. |
-| `screenshot` | PNG of the game window, scaled down (default longest side 900 px), optional crop. |
+| `screenshot` | PNG of the game window, scaled down (default longest side 640 px), optional crop. |
 | `window_status` | Game window found, focused, title, size. |
 | `press_key`, `type_text`, `mouse` | Keyboard (scan codes) and mouse input to the game window. |
+| `steps` | Up to 30 actions in one call (`key`, `keys`, `text`, `mouse`, `wait`, `command`, `console`, up to 3 `screenshot`). Stops at the first failure. Use it for any flow of inputs: each tool call is a whole model turn, and a screenshot stays in the context. |
 
 The window tools need an unlocked desktop on the test host. The daemon runs them through a PowerShell helper in the desktop session; no native module is installed.
 
