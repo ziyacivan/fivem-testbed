@@ -19,7 +19,7 @@ import { keyCode } from '../protocol/keys.ts';
 import { ConsoleBuffer } from './console-buffer.ts';
 import { WindowHelper } from './window-helper.ts';
 import { extraSecrets, type HostPaths, hostPaths, readSecrets, requireSecret, secretLine } from './paths.ts';
-import { killImage, killTree, processesWithPrefix, run } from './windows.ts';
+import { killImage, killTree, processesUnder, processesWithPrefix, run } from './windows.ts';
 
 interface State {
   connect: string;
@@ -164,8 +164,9 @@ class Daemon {
 
   async start(): Promise<Result<'server.start'>> {
     if (this.fxserver) return this.serverStatus();
-    if (processesWithPrefix('FXServer').length > 0) {
-      throw new Error('another FXServer process runs on the test host; stop it first');
+    // Only an FXServer of this root blocks the start; another testbed can run its own (SPEC-0005 D4).
+    if (processesUnder('FXServer.exe', this.paths.server).length > 0) {
+      throw new Error(`an FXServer of ${this.paths.server} runs on the test host; stop it first`);
     }
     const exe = path.join(this.paths.server, 'FXServer.exe');
     if (!fs.existsSync(exe)) throw new Error(`${exe} does not exist; run \`fivem-testbed host setup\``);

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fxserverUrl } from '../protocol/config.ts';
 import { hostPaths, initSecrets } from './paths.ts';
-import { powershell, processesWithPrefix, run } from './windows.ts';
+import { powershell, processesUnder, run } from './windows.ts';
 
 export const DAEMON_TASK = 'fivem-testbed-daemon';
 
@@ -15,7 +15,8 @@ async function installFxserver(paths: ReturnType<typeof hostPaths>, build: strin
     console.log(`fxserver: build ${build} already installed`);
     return;
   }
-  if (processesWithPrefix('FXServer').length > 0) throw new Error('fxserver: stop the server first');
+  // Only an FXServer of this root uses these files (SPEC-0005 D4).
+  if (processesUnder('FXServer.exe', paths.server).length > 0) throw new Error('fxserver: stop the server first');
   const archive = path.join(paths.tmp, `fxserver-${build}.7z`);
   if (!fs.existsSync(archive)) {
     console.log(`fxserver: downloading build ${build}`);
@@ -70,8 +71,8 @@ export async function runSetup(root: string, build: string): Promise<void> {
   } else {
     console.log('secrets: unchanged');
   }
-  if (processesWithPrefix('FXServer').length > 0) {
-    console.log('task: FXServer runs; the daemon was not restarted');
+  if (processesUnder('FXServer.exe', paths.server).length > 0) {
+    console.log('task: the FXServer of this root runs; the daemon was not restarted');
   } else {
     registerDaemonTask(paths.root);
   }

@@ -55,6 +55,10 @@ npx fivem-testbed client launch
 npx fivem-testbed logs --follow
 ```
 
+## Several testbeds on one test host
+
+The test host can also run another FXServer, for example the RedM server of `redm-testbed`. `fivem-testbed` checks only the FXServer of its own root (`<root>\server`) before it starts the server or installs a new build. Give each project its own port in `connect` (for example `127.0.0.1:30121`), because the endpoints use that port.
+
 ## Extra secrets
 
 A project can need more secrets, for example a database connection string. Put them in `secrets.env` on the test host:
